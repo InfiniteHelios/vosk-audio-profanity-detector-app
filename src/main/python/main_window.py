@@ -1,3 +1,4 @@
+import os
 from PyQt5.QtCore import pyqtSlot, QThread, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QMainWindow, QMessageBox, QFileDialog
@@ -46,7 +47,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     @pyqtSlot()
     def on_btnOpen_clicked(self):
         file = QFileDialog.getOpenFileName(
-            self, "Open audio file", "", "Audios (*.m4a)"
+            self, "Open audio file", "", "Audio Files (*.m4a *.mp3 *.wma)"
         )[0]
         if not file:
             return
@@ -110,19 +111,27 @@ class DetectorThread(QThread):
             word = item["word"]
             if word not in self.bad_words:
                 continue
-            conf = float(item["conf"])
-            start = datetime.timedelta(seconds=item["start"]).split(".", 2)[0]
-            end = datetime.timedelta(seconds=item["end"]).split(".", 2)[0]
-            string = 'Word: "%s"    Start: %s    End: %s    Conf: %d' % (
-                word,
-                str(start),
-                str(end),
-                conf,
-            )
-            self.progress.emit(string)
+            try:
+                conf = float(item["conf"])
+                start = str(datetime.timedelta(seconds=item["start"])).split(".", 2)[0]
+                end = str(datetime.timedelta(seconds=item["end"])).split(".", 2)[0]
+                string = 'Word: "%s"    Start: %s    End: %s    Conf: %d' % (
+                    word,
+                    str(start),
+                    str(end),
+                    conf,
+                )
+                self.progress.emit(string)
+            except Exception as err:
+                with open("error.txt", "a") as f:
+                    f.write(str(err) + "\n")
 
     def run(self):
         if not self.process:
+            startupinfo = None
+            if os.name == "nt":
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             self.process = subprocess.Popen(
                 [
                     "ffmpeg",
@@ -139,6 +148,7 @@ class DetectorThread(QThread):
                     "-",
                 ],
                 stdout=subprocess.PIPE,
+                startupinfo=startupinfo,
             )
 
         while True:
