@@ -16,11 +16,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         super().__init__(parent)
         self.setupUi(self)
 
-        SetLogLevel(-1)
-        self.model = Model("model")
-        self.rec = KaldiRecognizer(self.model, 16000)
-        self.rec.SetWords(True)
-
+        self.model = None
+        self.rec = None
         self.api_thread = None
         self.file = None
         self.bad_words = []
@@ -40,9 +37,31 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def closeEvent(self, event):
         super(QMainWindow, self).closeEvent(event)
         if self.api_thread:
+            self.api_thread.terminate()
             self.api_thread.exit(-1)
             self.api_thread.quit()
             self.api_thread.deleteLater()
+
+    @pyqtSlot()
+    def on_btnLoadModel_clicked(self):
+        if self.model:
+            return
+        self.statusBar().showMessage("Loading model...")
+        self.spinner.start()
+        self.centralWidget().setEnabled(False)
+        self.model_thread = ModelLoadingThread(self)
+        self.model_thread.finished.connect(self.onModelLoadingFinished)
+        self.model_thread.start()
+
+    def onModelLoadingFinished(self, model, rec):
+        self.model = model
+        self.rec = rec
+        self.spinner.stop()
+        self.centralWidget().setEnabled(True)
+        self.statusBar().showMessage("Model prepaired")
+        self.btnLoadModel.setEnabled(False)
+        self.model_thread.terminate()
+        self.model_thread.deleteLater()
 
     @pyqtSlot()
     def on_btnOpen_clicked(self):
@@ -54,8 +73,18 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.file = file
         self.edtFilePath.setText(self.file)
 
+    def get_bad_words(self):
+        try:
+            text = " ".join(self.txtBadWords.toPlainText().lower().split())
+            self.bad_words = [item.strip() for item in text.split(",")] if text else []
+        except Exception as err:
+            QMessageBox.critical(self, "Error", err)
+
     @pyqtSlot()
     def on_btnStart_clicked(self):
+        if not self.model:
+            QMessageBox.critical(self, "Error", "Please load model first.")
+            return
         if not self.file:
             QMessageBox.critical(self, "Error", "Please open audio file to detect.")
             return
@@ -63,8 +92,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if not len(self.bad_words):
             QMessageBox.critical(self, "Error", "Please type bad words.")
             return
+        self.spinner.start()
         self.listResult.clear()
         self.centralWidget().setEnabled(False)
+        self.statusBar().showMessage("Transcribing...")
 
         self.api_thread = DetectorThread(
             self.file, self.bad_words, self.rec, parent=self
@@ -73,30 +104,42 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.api_thread.finished.connect(self.api_thread.deleteLater)
         self.api_thread.progress.connect(self.onDetectingProgress)
         self.api_thread.start()
-        self.spinner.start()
-
-    def get_bad_words(self):
-        text = " ".join(self.txtBadWords.toPlainText().lower().split())
-        self.bad_words = [item.strip() for item in text.split(",")] if text else []
-
-    def onDetectingFinished(self):
-        self.spinner.stop()
-        self.centralWidget().setEnabled(True)
-        QMessageBox.information(
-            self, "Info", "Finished detection.\nPlease check the result list."
-        )
 
     def onDetectingProgress(self, info: str):
         if not info:
             return
         self.listResult.addItem(info)
 
+    def onDetectingFinished(self):
+        self.api_thread.terminate()
+        self.api_thread.deleteLater()
+        self.spinner.stop()
+        self.centralWidget().setEnabled(True)
+        self.statusBar().showMessage("Detection is finished.")
+        QMessageBox.information(
+            self, "Info", "Finished detection.\nPlease check the result list."
+        )
+
+
+class ModelLoadingThread(QThread):
+    finished = pyqtSignal(object, object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+
+    def run(self):
+        SetLogLevel(0)
+        model = Model("model")
+        rec = KaldiRecognizer(model, 16000)
+        rec.SetWords(True)
+        self.finished.emit(model, rec)
+
 
 class DetectorThread(QThread):
     finished = pyqtSignal()
     progress = pyqtSignal(str)
 
-    def __init__(self, file, bad_words, rec, parent):
+    def __init__(self, file, bad_words, rec, parent=None):
         super().__init__(parent)
         self.file = file
         self.bad_words = bad_words
@@ -109,7 +152,7 @@ class DetectorThread(QThread):
         result = jres["result"]
         for item in result:
             word = item["word"]
-            if word not in self.bad_words:
+            if not [ele for ele in self.bad_words if (ele in word)]:
                 continue
             try:
                 conf = float(item["conf"])
@@ -158,7 +201,5 @@ class DetectorThread(QThread):
             res = ""
             if self.rec.AcceptWaveform(data):
                 res = self.check_json_result(json.loads(self.rec.Result()))
-            self.progress.emit(res)
         res = self.check_json_result(json.loads(self.rec.FinalResult()))
-        self.progress.emit(res)
         self.finished.emit()

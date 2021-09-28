@@ -42,6 +42,13 @@
        </widget>
       </item>
       <item>
+       <widget class="QPushButton" name="btnLoadModel">
+        <property name="text">
+         <string>Load Model</string>
+        </property>
+       </widget>
+      </item>
+      <item>
        <widget class="QPushButton" name="btnStart">
         <property name="text">
          <string>Start</string>
